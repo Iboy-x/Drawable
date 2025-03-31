@@ -87,6 +87,7 @@ def main():
         # Draw the hand landmarks
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
+                # Draw landmarks on the frame
                 st.session_state.drawing_app.mp_draw.draw_landmarks(
                     frame, 
                     hand_landmarks,
@@ -98,12 +99,16 @@ def main():
                 h, w, c = frame.shape
                 x, y = int(index_finger.x * w), int(index_finger.y * h)
                 
+                # Draw a circle at the index finger tip for better visibility
+                cv2.circle(frame, (x, y), 10, (0, 255, 0), -1)
+                
                 # Check if thumb is up and index is pointing
                 if (st.session_state.drawing_app.is_thumb_up(hand_landmarks) and 
                     st.session_state.drawing_app.is_index_pointing(hand_landmarks)):
                     if st.session_state.drawing_app.last_point is None:
                         st.session_state.drawing_app.last_point = (x, y)
                     else:
+                        # Draw line on canvas
                         cv2.line(st.session_state.canvas, 
                                 st.session_state.drawing_app.last_point, 
                                 (x, y), 
@@ -135,6 +140,16 @@ def main():
                 file_name="drawing.png",
                 mime="image/png"
             )
+        
+        # Add status indicators
+        st.write("Status:")
+        st.write(f"Drawing Mode: {'ON' if st.session_state.drawing_app.last_point is not None else 'OFF'}")
+        st.write(f"Current Color: {color}")
+        st.write("Instructions:")
+        st.write("1. Point your index finger")
+        st.write("2. Raise your thumb")
+        st.write("3. Move your index finger to draw")
+        st.write("4. Lower your thumb to stop drawing")
 
 if __name__ == "__main__":
     main() 
