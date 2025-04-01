@@ -2,6 +2,7 @@ import streamlit as st
 import cv2
 import mediapipe as mp
 import numpy as np
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 
 # Initialize Streamlit
 st.title("Finger Drawing App ✋🎨")
@@ -25,66 +26,53 @@ if st.button("Clear Canvas"):
     st.session_state["canvas"] = None
     st.session_state["last_point"] = None
 
-# Open the camera
-cap = cv2.VideoCapture(0)
-if not cap.isOpened():
-    st.error("Error: Camera not accessible.")
-else:
-    frame_placeholder = st.empty()
+# WebRTC Video Processing
+class VideoTransformer(VideoTransformerBase):
+    def __init__(self):
+        self.canvas = None
+        self.last_point = None
 
-# Initialize canvas
-canvas = None
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        img = cv2.flip(img, 1)  # Mirror image
+        h, w, _ = img.shape
 
-# Video stream
-while cap.isOpened():
-    ret, frame = cap.read()
-    if not ret:
-        st.error("Video capture failed!")
-        break
+        # Initialize canvas
+        if self.canvas is None:
+            self.canvas = np.zeros_like(img)
 
-    frame = cv2.flip(frame, 1)  # Mirror image
-    h, w, _ = frame.shape
+        # Convert frame to RGB (for MediaPipe)
+        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        results = hands.process(rgb_img)
 
-    # Initialize drawing canvas
-    if st.session_state["canvas"] is None:
-        st.session_state["canvas"] = np.zeros_like(frame)
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                # Draw hand landmarks
+                mp_draw.draw_landmarks(img, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-    # Convert frame to RGB (for MediaPipe)
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands.process(rgb_frame)
+                # Get index finger tip position
+                index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+                x, y = int(index_tip.x * w), int(index_tip.y * h)
 
-    if results.multi_hand_landmarks:
-        for hand_landmarks in results.multi_hand_landmarks:
-            # Draw hand landmarks
-            mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                # Check if thumb is up (to start drawing)
+                thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+                thumb_ip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_IP]
+                is_thumb_up = thumb_tip.y < thumb_ip.y
 
-            # Get index finger tip position
-            index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
-            x, y = int(index_tip.x * w), int(index_tip.y * h)
-
-            # Check if thumb is up (to start drawing)
-            thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
-            thumb_ip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_IP]
-            is_thumb_up = thumb_tip.y < thumb_ip.y
-
-            if is_thumb_up:
-                if st.session_state["last_point"] is None:
-                    st.session_state["last_point"] = (x, y)
+                if is_thumb_up:
+                    if self.last_point is None:
+                        self.last_point = (x, y)
+                    else:
+                        # Draw a smooth line from last point to current point
+                        cv2.line(self.canvas, self.last_point, (x, y), colors[selected_color], 5)
+                    self.last_point = (x, y)
                 else:
-                    # Draw a smooth line from last point to current point
-                    cv2.line(st.session_state["canvas"], 
-                             st.session_state["last_point"], 
-                             (x, y), 
-                             colors[selected_color], 5)
-                st.session_state["last_point"] = (x, y)
-            else:
-                st.session_state["last_point"] = None
+                    self.last_point = None
 
-    # Merge canvas with video frame
-    frame = cv2.addWeighted(frame, 1, st.session_state["canvas"], 1, 0)
+        # Merge canvas with video frame
+        img = cv2.addWeighted(img, 1, self.canvas, 1, 0)
 
-    # Display updated frame
-    frame_placeholder.image(frame, channels="BGR", use_column_width=True)
+        return img
 
-cap.release()
-cv2.destroyAllWindows()
+# Run WebRTC Streamer
+webrtc_streamer(key="draw", video_transformer_factory=VideoTransformer)
