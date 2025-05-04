@@ -1,105 +1,91 @@
-import streamlit as st
 import cv2
+import streamlit as st
 import mediapipe as mp
 import numpy as np
-from PIL import Image
-import io
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 
-class FingerDrawing:
-    def __init__(self):
-        self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=1,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-        self.mp_draw = mp.solutions.drawing_utils
-        
-        self.last_point = None
-        self.colors = {
-            'green': (0, 255, 0),
-            'red': (0, 0, 255),
-            'blue': (255, 0, 0),
-            'yellow': (0, 255, 255)
-        }
-        self.current_color = 'green'
-        self.line_thickness = 3
+# Initialize the MediaPipe hand tracking module
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
+mp_draw = mp.solutions.drawing_utils
 
-    def is_thumb_up(self, hand_landmarks):
-        thumb_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
-        thumb_ip = hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_IP]
-        return thumb_tip.y < thumb_ip.y
-        
-    def is_index_pointing(self, hand_landmarks):
-        index_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
-        index_pip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_PIP]
-        return index_tip.y < index_pip.y
+# Initialize the webcam
+camera = cv2.VideoCapture(0)
 
-class VideoProcessor(VideoProcessorBase):
-    def __init__(self):
-        self.drawing_app = FingerDrawing()
-        self.canvas = None
+# Streamlit page title
+st.title("Finger Drawing App")
 
-    def recv(self, frame):
-        image = frame.to_ndarray(format="bgr24")
-        
-        if self.canvas is None:
-            self.canvas = np.zeros_like(image)
-        
-        rgb_frame = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = self.drawing_app.hands.process(rgb_frame)
-        
-        if results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
-                self.drawing_app.mp_draw.draw_landmarks(
-                    image, hand_landmarks, self.drawing_app.mp_hands.HAND_CONNECTIONS)
-                
-                index_finger = hand_landmarks.landmark[self.drawing_app.mp_hands.HandLandmark.INDEX_FINGER_TIP]
-                h, w, _ = image.shape
-                x, y = int(index_finger.x * w), int(index_finger.y * h)
-                
-                cv2.circle(image, (x, y), 5, (0, 255, 0), -1)
-                
-                if (self.drawing_app.is_thumb_up(hand_landmarks) and 
-                    self.drawing_app.is_index_pointing(hand_landmarks)):
-                    if self.drawing_app.last_point is None:
-                        self.drawing_app.last_point = (x, y)
-                    else:
-                        cv2.line(self.canvas, 
-                                 self.drawing_app.last_point, 
-                                 (x, y), 
-                                 self.drawing_app.colors[self.drawing_app.current_color], 
-                                 self.drawing_app.line_thickness)
-                    self.drawing_app.last_point = (x, y)
+# Color selection for drawing
+color = st.selectbox("Select Color", ["green", "red", "blue", "yellow"], key="color")
+
+# Initialize the drawing canvas
+canvas = None
+last_point = None
+colors = {'green': (0, 255, 0), 'red': (0, 0, 255), 'blue': (255, 0, 0), 'yellow': (0, 255, 255)}
+line_thickness = 3
+
+# Function to check if the thumb is raised
+def is_thumb_up(hand_landmarks):
+    thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+    thumb_ip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_IP]
+    return thumb_tip.y < thumb_ip.y
+
+# Function to check if the index finger is pointing
+def is_index_pointing(hand_landmarks):
+    index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+    index_pip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_PIP]
+    return index_tip.y < index_pip.y
+
+# Open Streamlit's image window
+FRAME_WINDOW = st.image([])
+
+# Run webcam feed
+run = st.checkbox('Run Webcam Feed')
+
+while run:
+    ret, frame = camera.read()
+    if not ret:
+        st.write("Error: Couldn't access the webcam.")
+        break
+    
+    # Convert the frame to RGB (MediaPipe expects RGB images)
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb_frame)
+
+    # Initialize canvas if not already initialized
+    if canvas is None:
+        canvas = np.zeros_like(frame)
+
+    # If hands are detected, process the landmarks and draw
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
+            mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            
+            # Get index finger tip coordinates
+            index_finger = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+            h, w, _ = frame.shape
+            x, y = int(index_finger.x * w), int(index_finger.y * h)
+            
+            # Check if thumb is up and index finger is pointing
+            if is_thumb_up(hand_landmarks) and is_index_pointing(hand_landmarks):
+                if last_point is None:
+                    last_point = (x, y)
                 else:
-                    self.drawing_app.last_point = None
+                    cv2.line(canvas, last_point, (x, y), colors[color], line_thickness)
+                last_point = (x, y)
+            else:
+                last_point = None
 
-        image = cv2.addWeighted(image, 1, self.canvas, 1, 0)
-        return frame.from_ndarray(image, format="bgr24")
-
-
-def main():
-    st.title("Finger Drawing App")
-    st.write("Draw using your finger! Point your index finger and raise your thumb to draw.")
+    # Combine drawing with the original frame
+    frame = cv2.addWeighted(frame, 1, canvas, 1, 0)
     
-    # Color selection
-    color = st.selectbox("Select Color", ["green", "red", "blue", "yellow"], key="color")
-    
-    # Setup WebRTC
-    webrtc_streamer(
-        key="finger-drawing",
-        mode=WebRtcMode.SENDRECV,
-        video_processor_factory=VideoProcessor,
-        media_stream_constraints={
-            "video": True,
-            "audio": False
-        }
-    )
+    # Show the frame in Streamlit
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    FRAME_WINDOW.image(frame_rgb)
 
-    st.write(f"Current Color: {color}")
-
-if __name__ == "__main__":
-    main()
-
+# Close the webcam when done
+camera.release()
